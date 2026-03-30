@@ -46,6 +46,7 @@ type DbServiceRequestRow = {
   procurement_method: string
   project_type: string
   public_vendor_selection: boolean | null
+  single_source_reason: string
   has_control_price: boolean | null
   control_price_wo_tax: string
   vendor_invite_reason: string
@@ -132,6 +133,7 @@ const dbRowToRecord = (row: DbServiceRequestRow): ServiceRequestRecord => {
     procurementMethod: row.procurement_method as ServiceRequestRecord["procurementMethod"],
     projectType: row.project_type as ServiceRequestRecord["projectType"],
     publicVendorSelection: row.public_vendor_selection,
+    singleSourceReason: row.single_source_reason || "",
     hasControlPrice: row.has_control_price,
     controlPriceWoTax: row.control_price_wo_tax,
     vendorInviteReason: row.vendor_invite_reason,
@@ -176,6 +178,7 @@ const formToDb = (form: Partial<ServiceRequestForm>) => ({
   procurement_method: form.procurementMethod ?? "",
   project_type: form.projectType ?? "",
   public_vendor_selection: form.publicVendorSelection ?? null,
+  single_source_reason: form.singleSourceReason ?? "",
   has_control_price: form.hasControlPrice ?? null,
   control_price_wo_tax: form.controlPriceWoTax ?? "",
   vendor_invite_reason: form.vendorInviteReason ?? "",
@@ -194,6 +197,17 @@ const formToDb = (form: Partial<ServiceRequestForm>) => ({
   lot_division_reason: form.lotDivisionReason ?? "",
   attachments: form.attachments ?? [],
 })
+
+const withoutSingleSourceReason = (payload: Record<string, unknown>) => {
+  const next = { ...payload }
+  delete next.single_source_reason
+  return next
+}
+
+const isMissingColumnError = (error: unknown, column: string) => {
+  const msg = String((error as { message?: unknown } | null)?.message || "")
+  return msg.toLowerCase().includes("column") && msg.includes(column) && msg.toLowerCase().includes("does not exist")
+}
 
 const users: SessionUser[] = [
   {
@@ -263,6 +277,7 @@ const blankForm = (): ServiceRequestForm => ({
   procurementMethod: "",
   projectType: "",
   publicVendorSelection: null,
+  singleSourceReason: "",
   hasControlPrice: null,
   controlPriceWoTax: "",
   vendorInviteReason: "",
@@ -286,6 +301,19 @@ const isTruthy = (v: unknown) => (typeof v === "string" ? v.trim().length > 0 : 
 
 const validateOnSubmit = (form: ServiceRequestForm) => {
   const missing: string[] = []
+  const procurementMethod = String(form.procurementMethod || "").trim()
+  const showPublicVendorSelection =
+    procurementMethod === "询比采购" ||
+    procurementMethod === "竞价采购" ||
+    procurementMethod === "谈判采购" ||
+    procurementMethod === "公开招标" ||
+    procurementMethod === "直接采购" ||
+    procurementMethod === "邀请招标"
+  const lockPublicVendorSelection = procurementMethod === "直接采购" || procurementMethod === "邀请招标"
+  const requirePublicVendorSelection =
+    procurementMethod === "询比采购" || procurementMethod === "竞价采购" || procurementMethod === "谈判采购" || procurementMethod === "公开招标"
+  const showLotDivisionReason = procurementMethod === "公开招标" || procurementMethod === "邀请招标"
+  const canShowNonPublic = showPublicVendorSelection && (lockPublicVendorSelection || form.publicVendorSelection === false)
   const must = (key: keyof ServiceRequestForm, label: string) => {
     const v = form[key]
     if (Array.isArray(v)) {
@@ -302,7 +330,8 @@ const validateOnSubmit = (form: ServiceRequestForm) => {
   must("needDate", "需求时间")
   must("procurementMethod", "采购方式")
   must("projectType", "项目类型")
-  if (form.publicVendorSelection === null) missing.push("公开选商")
+  if (requirePublicVendorSelection && form.publicVendorSelection === null) missing.push("公开选商")
+  if (lockPublicVendorSelection && form.publicVendorSelection !== false) missing.push("公开选商")
   if (form.hasControlPrice === null) missing.push("是否设控制价")
   if (form.hasControlPrice === true) must("controlPriceWoTax", "控制价（不含税，万元）")
 
@@ -311,7 +340,8 @@ const validateOnSubmit = (form: ServiceRequestForm) => {
   if (!byGroup("技术方案及批复")) missing.push("技术方案及批复")
   if (!byGroup("采购需求")) missing.push("采购需求")
 
-  if (form.publicVendorSelection === false) {
+  if (canShowNonPublic) {
+    if (procurementMethod === "直接采购") must("singleSourceReason", "单一来源选商理由")
     must("vendorInviteReason", "供应商邀请理由及产生方式")
     must("invitedVendors", "拟邀请参加选商的供应商")
     must("budgetProjectCBS", "预算项目(CBS)")
@@ -324,6 +354,7 @@ const validateOnSubmit = (form: ServiceRequestForm) => {
   must("vendorSelectionRequirements", "选商要求")
   must("implementationLocation", "实施地点")
   must("serviceProcurementPeriod", "服务（采购）期限")
+  if (showLotDivisionReason) must("lotDivisionReason", "标段（标包）划分及标段划分理由")
   must("contractSubject", "签约主体")
   must("applicant", "申请人")
   must("contactInfo", "联系方式")
@@ -887,7 +918,10 @@ router.post("/", async (req: Request, res: Response) => {
       created_by_user_id: user.id,
       created_by_name: user.name,
     }
-    const { data, error } = await supabase.from("service_requests").insert(insertPayload).select("*").single()
+    let { data, error } = await supabase.from("service_requests").insert(insertPayload).select("*").single()
+    if (error && isMissingColumnError(error, "single_source_reason")) {
+      ;({ data, error } = await supabase.from("service_requests").insert(withoutSingleSourceReason(insertPayload)).select("*").single())
+    }
     if (error || !data) {
       if (clientRequestId && isUuid(clientRequestId) && (error?.code === "23505" || String(error?.message || "").toLowerCase().includes("duplicate"))) {
         const { data: existing, error: existingErr } = await supabase
@@ -987,12 +1021,16 @@ router.put("/:id", async (req: Request, res: Response) => {
     }
 
     const payload = (req.body || {}) as ServiceRequestForm
-    const { data: updated, error } = await supabase
-      .from("service_requests")
-      .update(formToDb(payload))
-      .eq("id", req.params.id)
-      .select("*")
-      .single()
+    const updatePayload = formToDb(payload) as Record<string, unknown>
+    let { data: updated, error } = await supabase.from("service_requests").update(updatePayload).eq("id", req.params.id).select("*").single()
+    if (error && isMissingColumnError(error, "single_source_reason")) {
+      ;({ data: updated, error } = await supabase
+        .from("service_requests")
+        .update(withoutSingleSourceReason(updatePayload))
+        .eq("id", req.params.id)
+        .select("*")
+        .single())
+    }
 
     if (error || !updated) {
       res.status(500).json({ success: false, error: "DbError" })

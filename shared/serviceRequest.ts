@@ -59,6 +59,7 @@ export type ServiceRequestForm = {
   procurementMethod: ProcurementMethod | ""
   projectType: ProjectType | ""
   publicVendorSelection: boolean | null
+  singleSourceReason: string
   hasControlPrice: boolean | null
   controlPriceWoTax: string
   vendorInviteReason: string
@@ -119,4 +120,3 @@ export type SessionUser = {
   company: string
   department: string
 }
-

@@ -32,6 +32,7 @@ const blank = (): ServiceRequestForm => ({
   procurementMethod: "",
   projectType: "",
   publicVendorSelection: null,
+  singleSourceReason: "",
   hasControlPrice: null,
   controlPriceWoTax: "",
   vendorInviteReason: "",
@@ -77,13 +78,26 @@ export default function RequestFormPage({ mode }: { mode: Mode }) {
     return f
   })
 
-  const showVendorSelection =
-    String(form.procurementMethod || "")
-      .trim() === "公开招标" ||
-    String(form.procurementMethod || "")
-      .trim() === "邀请招标"
-  const canShowNonPublic = showVendorSelection && form.publicVendorSelection === false
+  const procurementMethod = String(form.procurementMethod || "").trim()
+  const showPublicVendorSelection =
+    procurementMethod === "询比采购" ||
+    procurementMethod === "竞价采购" ||
+    procurementMethod === "谈判采购" ||
+    procurementMethod === "公开招标" ||
+    procurementMethod === "直接采购" ||
+    procurementMethod === "邀请招标"
+  const lockPublicVendorSelection = procurementMethod === "直接采购" || procurementMethod === "邀请招标"
+  const requirePublicVendorSelection =
+    procurementMethod === "询比采购" || procurementMethod === "竞价采购" || procurementMethod === "谈判采购" || procurementMethod === "公开招标"
+  const showLotDivisionReason = procurementMethod === "公开招标" || procurementMethod === "邀请招标"
+  const canShowNonPublic = showPublicVendorSelection && (lockPublicVendorSelection || form.publicVendorSelection === false)
   const showControlPrice = form.hasControlPrice === true
+
+  useEffect(() => {
+    if (!lockPublicVendorSelection) return
+    if (form.publicVendorSelection === false) return
+    setForm((s) => ({ ...s, publicVendorSelection: false }))
+  }, [form.publicVendorSelection, lockPublicVendorSelection])
 
   const load = useCallback(async () => {
     if (mode !== "edit" || !id) return
@@ -104,6 +118,7 @@ export default function RequestFormPage({ mode }: { mode: Mode }) {
       procurementMethod: r.data.procurementMethod,
       projectType: r.data.projectType,
       publicVendorSelection: r.data.publicVendorSelection,
+      singleSourceReason: r.data.singleSourceReason,
       hasControlPrice: r.data.hasControlPrice,
       controlPriceWoTax: r.data.controlPriceWoTax,
       vendorInviteReason: r.data.vendorInviteReason,
@@ -197,13 +212,14 @@ export default function RequestFormPage({ mode }: { mode: Mode }) {
     must(!!form.needDate, "需求时间")
     must(!!form.procurementMethod, "采购方式")
     must(!!form.projectType, "项目类型")
-    if (showVendorSelection) must(form.publicVendorSelection !== null, "公开选商")
+    if (requirePublicVendorSelection) must(form.publicVendorSelection !== null, "公开选商")
     must(form.hasControlPrice !== null, "是否设控制价")
     if (showControlPrice) must(!!form.controlPriceWoTax, "控制价（不含税，万元）")
     must(hasAttachment(form.attachments, "采购依据"), "采购依据")
     must(hasAttachment(form.attachments, "技术方案及批复"), "技术方案及批复")
     must(hasAttachment(form.attachments, "采购需求"), "采购需求")
     if (canShowNonPublic) {
+      if (procurementMethod === "直接采购") must(!!form.singleSourceReason, "单一来源选商理由")
       must(!!form.vendorInviteReason, "供应商邀请理由及产生方式")
       must(form.invitedVendors.length > 0, "拟邀请参加选商的供应商")
       must(!!form.budgetProjectCBS, "预算项目(CBS)")
@@ -215,12 +231,12 @@ export default function RequestFormPage({ mode }: { mode: Mode }) {
     must(!!form.vendorSelectionRequirements, "选商要求")
     must(!!form.implementationLocation, "实施地点")
     must(!!form.serviceProcurementPeriod, "服务（采购）期限")
-    if (showVendorSelection) must(!!form.lotDivisionReason, "标段（标包）划分及标段划分理由")
+    if (showLotDivisionReason) must(!!form.lotDivisionReason, "标段（标包）划分及标段划分理由")
     must(!!form.contractSubject, "签约主体")
     must(!!form.applicant, "申请人")
     must(!!form.contactInfo, "联系方式")
     return missing
-  }, [form, canShowNonPublic, showControlPrice, showVendorSelection])
+  }, [form, canShowNonPublic, procurementMethod, requirePublicVendorSelection, showControlPrice, showLotDivisionReason])
 
   const missingSet = useMemo(() => new Set(requiredMissing), [requiredMissing])
   const [showMissingTips, setShowMissingTips] = useState(false)
@@ -235,6 +251,7 @@ export default function RequestFormPage({ mode }: { mode: Mode }) {
       采购方式: "sr_f_procurementMethod",
       项目类型: "sr_f_projectType",
       公开选商: "sr_f_publicVendorSelection",
+      单一来源选商理由: "sr_f_singleSourceReason",
       是否设控制价: "sr_f_hasControlPrice",
       "控制价（不含税，万元）": "sr_f_controlPriceWoTax",
       采购依据: "sr_a_basis",
@@ -560,12 +577,17 @@ export default function RequestFormPage({ mode }: { mode: Mode }) {
                 onChange={(v) =>
                   setForm((s) => {
                     const next = v as ProcurementMethod | ""
-                    const allow = String(next || "").trim() === "公开招标" || String(next || "").trim() === "邀请招标"
+                    const pm = String(next || "").trim()
+                    const prevPm = String(s.procurementMethod || "").trim()
+                    const prevLock = prevPm === "直接采购" || prevPm === "邀请招标"
+                    const lock = pm === "直接采购" || pm === "邀请招标"
+                    const isTender = pm === "公开招标" || pm === "邀请招标"
                     return {
                       ...s,
                       procurementMethod: next,
-                      publicVendorSelection: allow ? s.publicVendorSelection : null,
-                      lotDivisionReason: allow ? s.lotDivisionReason : "",
+                      publicVendorSelection: pm === "" ? null : lock ? false : prevLock ? null : s.publicVendorSelection,
+                      singleSourceReason: pm === "直接采购" ? s.singleSourceReason : "",
+                      lotDivisionReason: isTender ? s.lotDivisionReason : "",
                     }
                   })
                 }
@@ -583,15 +605,16 @@ export default function RequestFormPage({ mode }: { mode: Mode }) {
                 fieldId={fieldIdByLabel["项目类型"]}
                 error={showMissingTips && missingSet.has("项目类型") ? "请选择" : undefined}
               />
-              {showVendorSelection ? (
+              {showPublicVendorSelection ? (
                 <SelectField
-                  label="公开选商*"
+                  label={lockPublicVendorSelection ? "公开选商" : "公开选商*"}
                   value={form.publicVendorSelection === null ? "" : form.publicVendorSelection ? "是" : "否"}
                   onChange={(v) => setForm((s) => ({ ...s, publicVendorSelection: v === "" ? null : v === "是" }))}
                   options={["", "是", "否"]}
                   help="选择是否公开选商；选“否”会开启非公开选商信息的必填项。"
                   fieldId={fieldIdByLabel["公开选商"]}
                   error={showMissingTips && missingSet.has("公开选商") ? "请选择" : undefined}
+                  disabled={lockPublicVendorSelection}
                 />
               ) : null}
               <SelectField
@@ -688,6 +711,27 @@ export default function RequestFormPage({ mode }: { mode: Mode }) {
             <Card className="mt-4 p-5">
               <div className="text-sm font-semibold">非公开选商信息</div>
               <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                {procurementMethod === "直接采购" ? (
+                  <SelectField
+                    label="单一来源选商理由*"
+                    value={form.singleSourceReason}
+                    onChange={(v) => setForm((s) => ({ ...s, singleSourceReason: v }))}
+                    options={[
+                      "",
+                      "(一)涉及商业秘密，不适宜竟争性采购",
+                      "(二)不可预见的特殊情况需要紧急采购",
+                      "(三)不可替代技术",
+                      "(四)有原厂配套要求",
+                      "(五)响应人有且仅有1家",
+                      "(六)创新需要",
+                      "(七)明确的其他情形",
+                    ]}
+                    help="选择单一来源采购的适用情形，用于合规留痕。"
+                    className="md:col-span-2"
+                    fieldId={fieldIdByLabel["单一来源选商理由"]}
+                    error={showMissingTips && missingSet.has("单一来源选商理由") ? "请选择" : undefined}
+                  />
+                ) : null}
                 <TextareaField
                   label="供应商邀请理由及产生方式*"
                   value={form.vendorInviteReason}
@@ -831,7 +875,7 @@ export default function RequestFormPage({ mode }: { mode: Mode }) {
                 help="补充说明与约束条件（如进场要求、合规要求、特殊风险等）。"
                 className="md:col-span-2"
               />
-              {showVendorSelection ? (
+              {showLotDivisionReason ? (
                 <TextareaField
                   label="标段（标包）划分及标段划分理由*"
                   value={form.lotDivisionReason}
@@ -952,6 +996,7 @@ function SelectField({
   help,
   fieldId,
   error,
+  disabled,
 }: {
   label: string
   value: string
@@ -961,6 +1006,7 @@ function SelectField({
   help?: string
   fieldId?: string
   error?: string
+  disabled?: boolean
 }) {
   return (
     <div id={fieldId} className={(className ? className + " " : "") + "scroll-mt-24"}>
@@ -969,6 +1015,7 @@ function SelectField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         aria-invalid={!!error}
+        disabled={disabled}
         className={
           "mt-2 " +
           (error ? "border-rose-300/70 focus-visible:ring-rose-500/30 dark:border-rose-400/30" : "")
