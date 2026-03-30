@@ -55,7 +55,7 @@ export default function RequestsListPageImpl({ view }: { view: RequestsListView 
     maxHeight: number
     placement: "top" | "bottom"
     anchorX: number
-  }>({ top: 0, left: 0, maxHeight: 0, placement: "bottom" })
+  }>({ top: 0, left: 0, maxHeight: 0, placement: "bottom", anchorX: 0 })
 
   const computeColumnsMenuPos = useCallback(
     (
